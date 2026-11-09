@@ -1,0 +1,8 @@
+__pycache__/
+.venv/
+venv/
+.env
+*.py[cod]
+wine_model.pkl
+wine_quality.csv
+winequality-red.csv
