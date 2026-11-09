@@ -1,14 +1,16 @@
-"""Streamlit interface for the wine quality prediction lab.
+"""Streamlit app for the Wine Quality Prediction laboratory.
 
 Run with: streamlit run streamlit_app.py
-The app accepts comma- or semicolon-delimited CSV files. If a local model
-artifact is not available, it trains and evaluates the lab model on startup.
+Accepts comma- and semicolon-delimited CSV files, including UCI's quoted
+semicolon-separated red-wine dataset.
 """
 
 from __future__ import annotations
 
-from io import BytesIO
+import csv
+from io import BytesIO, StringIO
 from pathlib import Path
+import re
 import zipfile
 
 import pandas as pd
@@ -29,36 +31,90 @@ DATA_URL = (
 )
 DATA_CANDIDATES = ("wine_quality.csv", "winequality-red.csv")
 ZIP_CANDIDATES = ("wine-quality-prediction.zip", "winequality.zip")
+FEATURE_COLUMNS = [
+    "fixed acidity",
+    "volatile acidity",
+    "citric acid",
+    "residual sugar",
+    "chlorides",
+    "free sulfur dioxide",
+    "total sulfur dioxide",
+    "density",
+    "pH",
+    "sulphates",
+    "alcohol",
+]
 LABELS = ["NEEDS IMPROVEMENT", "GOOD QUALITY"]
 
 
+def _normalize_headers(frame: pd.DataFrame) -> pd.DataFrame:
+    """Trim quoting/spacing and map common header variants to canonical names."""
+    rename = {}
+    canonical = {re.sub(r"[^a-z0-9]", "", name.lower()): name for name in FEATURE_COLUMNS}
+    canonical["quality"] = "quality"
+    for column in frame.columns:
+        cleaned = str(column).replace("\ufeff", "").strip().strip('"').strip("'").strip()
+        key = re.sub(r"[^a-z0-9]", "", cleaned.lower())
+        rename[column] = canonical.get(key, cleaned)
+    frame = frame.rename(columns=rename)
+    # Duplicate headers after normalization are ambiguous and cannot be safely used.
+    return frame.loc[:, ~frame.columns.duplicated()]
+
+
 def _read_csv_flexible(source: str | BytesIO) -> pd.DataFrame:
-    """Read comma- or semicolon-separated CSV and clean its column headers."""
-    frame = pd.read_csv(
-        source,
-        sep=None,
-        engine="python",
-        skipinitialspace=True,
-        encoding="utf-8-sig",
-    )
-    frame.columns = [str(column).strip().strip('"').strip("'") for column in frame.columns]
-    return frame
+    """Read a comma-, semicolon-, or tab-delimited CSV robustly."""
+    if isinstance(source, BytesIO):
+        raw = source.getvalue()
+        text = raw.decode("utf-8-sig")
+    elif str(source).startswith(("http://", "https://")):
+        # The public UCI URL has a known delimiter and avoids re-downloading per attempt.
+        text = pd.read_csv(source, sep=";", encoding="utf-8-sig").to_csv(index=False)
+    else:
+        text = Path(source).read_text(encoding="utf-8-sig")
+
+    sample = text[:8192]
+    try:
+        delimiter = csv.Sniffer().sniff(sample, delimiters=";,\t").delimiter
+    except csv.Error:
+        # Choose the delimiter occurring most often in the header line.
+        first_line = sample.splitlines()[0] if sample else ""
+        delimiter = max((";", ",", "\t"), key=first_line.count)
+
+    candidates = [delimiter] + [sep for sep in (";", ",", "\t") if sep != delimiter]
+    best_frame = None
+    best_score = -1
+    for sep in candidates:
+        try:
+            frame = pd.read_csv(StringIO(text), sep=sep, skipinitialspace=True)
+        except (pd.errors.ParserError, pd.errors.EmptyDataError):
+            continue
+        frame = _normalize_headers(frame)
+        available = set(frame.columns)
+        score = sum(column in available for column in FEATURE_COLUMNS)
+        if "quality" in available:
+            score += 1
+        if score > best_score:
+            best_frame, best_score = frame, score
+        if score == len(FEATURE_COLUMNS) + 1:
+            break
+
+    if best_frame is None or best_score == 0:
+        raise ValueError("Could not detect a valid CSV header or delimiter.")
+    return best_frame
 
 
 def _read_wine_csv(source: str | BytesIO) -> pd.DataFrame:
-    """Read a wine dataset and check its required target column."""
+    """Read a training dataset and validate its target and feature columns."""
     frame = _read_csv_flexible(source)
-    if "quality" not in frame.columns:
-        raise ValueError(
-            "The dataset must contain a 'quality' column. Check the header and "
-            "that the file uses commas or semicolons as delimiters."
-        )
+    missing = [column for column in [*FEATURE_COLUMNS, "quality"] if column not in frame.columns]
+    if missing:
+        raise ValueError("Training data is missing required columns: " + ", ".join(missing))
     return frame
 
 
 @st.cache_data(show_spinner="Loading the red wine dataset...")
 def load_dataset() -> pd.DataFrame:
-    """Load a local dataset, dataset in a ZIP, or the public UCI dataset."""
+    """Load a local dataset, a matching CSV from a ZIP, or the UCI dataset."""
     root = Path(__file__).resolve().parent
     for filename in DATA_CANDIDATES:
         path = root / filename
@@ -70,11 +126,7 @@ def load_dataset() -> pd.DataFrame:
         if path.is_file():
             with zipfile.ZipFile(path) as archive:
                 match = next(
-                    (
-                        name
-                        for name in archive.namelist()
-                        if name.lower().endswith("winequality-red.csv")
-                    ),
+                    (name for name in archive.namelist() if name.lower().endswith("winequality-red.csv")),
                     None,
                 )
                 if match:
@@ -85,7 +137,7 @@ def load_dataset() -> pd.DataFrame:
 
 
 def build_model() -> Pipeline:
-    """Create the Random Forest pipeline specified in the laboratory."""
+    """Create the lab Random Forest preprocessing/classification pipeline."""
     return Pipeline(
         [
             ("imputer", SimpleImputer(strategy="median")),
@@ -104,18 +156,18 @@ def build_model() -> Pipeline:
 
 @st.cache_resource(show_spinner="Training and evaluating the wine quality model...")
 def train_and_evaluate(dataset: pd.DataFrame):
-    """Train on a stratified split and return model plus holdout metrics."""
+    """Train on a stratified split and return model and holdout metrics."""
     clean = dataset.drop_duplicates().copy()
+    clean["quality"] = pd.to_numeric(clean["quality"], errors="coerce")
+    clean = clean.dropna(subset=["quality"])
     y = (clean["quality"] >= 6).astype(int)
-    # Keep quality out of X: it is only the target used to create y.
-    X = clean.drop(columns=["quality"])
-    X = X.apply(pd.to_numeric, errors="coerce")
+    # quality is the target only; it is deliberately excluded from predictors.
+    X = clean[FEATURE_COLUMNS].apply(pd.to_numeric, errors="coerce")
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.20, random_state=42, stratify=y
     )
     model = build_model().fit(X_train, y_train)
     predictions = model.predict(X_test)
-
     report = classification_report(
         y_test,
         predictions,
@@ -145,30 +197,33 @@ st.title("🍷 Wine Quality Prediction System")
 st.caption("Section B classroom prototype for preliminary quality classification")
 st.info(
     "Prediction rule: quality ≥ 6 = GOOD QUALITY; quality < 6 = NEEDS IMPROVEMENT. "
-    "The original quality score is used only to create the training target, never as an input feature."
+    "The original quality score creates the training target and is never an input feature."
 )
+
+with st.expander("App features", expanded=True):
+    st.markdown(
+        "- Dataset preview\n"
+        "- Missing-value and duplicate checks\n"
+        "- Quality distribution view\n"
+        "- Model evaluation metrics\n"
+        "- Upload CSV prediction flow\n"
+        "- Download prediction results\n"
+        "- Responsible-use warning"
+    )
 
 try:
     data = load_dataset()
-    if data.empty:
-        st.error("The wine dataset is empty.")
-        st.stop()
-    if not pd.api.types.is_numeric_dtype(pd.to_numeric(data["quality"], errors="coerce")):
-        data["quality"] = pd.to_numeric(data["quality"], errors="coerce")
+    data["quality"] = pd.to_numeric(data["quality"], errors="coerce")
     data = data.dropna(subset=["quality"])
     if data.empty:
-        st.error("The dataset's quality column has no numeric values.")
+        st.error("The dataset has no rows with a numeric quality score.")
         st.stop()
     model, accuracy, metrics, matrix, test_count = train_and_evaluate(data)
 except Exception as exc:
-    st.error(
-        "Could not load or train the wine model. Check the dataset and required "
-        "dependencies, then try again."
-    )
+    st.error("Could not load or train the wine model. Check the dataset and try again.")
     st.exception(exc)
     st.stop()
 
-clean_data = data.drop_duplicates()
 first, second, third = st.columns(3)
 first.metric("Records", f"{len(data):,}")
 second.metric("Average quality score", f"{data['quality'].mean():.2f}")
@@ -187,8 +242,8 @@ with tab_overview:
                 "Description": [
                     "Screen wine samples preliminarily using physicochemical measurements.",
                     "Quality-control staff, production supervisor, or data analyst.",
-                    "The 11 physicochemical measurement columns in the wine dataset.",
-                    "Validate columns → preprocess → apply classifier → return a category.",
+                    "Eleven physicochemical measurements from the red-wine dataset.",
+                    "Validate columns → impute missing values → classify → display results.",
                     "GOOD QUALITY / NEEDS IMPROVEMENT and evaluation results.",
                     "Trained on one red-wine dataset; results may not generalize to other settings.",
                 ],
@@ -196,8 +251,8 @@ with tab_overview:
         ).set_index("SAD element")
     )
     st.markdown(
-        "**Mini use-case:** enter measurements or upload a CSV → validate required "
-        "columns → predict the category → review or download results."
+        "**Mini use-case:** upload a CSV → validate required measurement columns → "
+        "predict each row → review or download results."
     )
 
 with tab_data:
@@ -213,10 +268,7 @@ with tab_data:
 
 with tab_evaluation:
     st.subheader("Random Forest holdout evaluation")
-    st.write(
-        "Median imputation → scaling → 150-tree Random Forest. "
-        "Stratified 80/20 split; random_state=42."
-    )
+    st.write("Median imputation → scaling → 150-tree Random Forest; stratified 80/20 split; random_state=42.")
     c1, c2 = st.columns(2)
     c1.metric("Accuracy", f"{accuracy:.3f}")
     c2.metric("Test samples", test_count)
@@ -224,20 +276,16 @@ with tab_evaluation:
     st.dataframe(metrics, use_container_width=True, hide_index=True)
     st.markdown("**Confusion matrix** (rows = actual, columns = predicted)")
     st.dataframe(matrix, use_container_width=True)
-    st.info(
-        "Review precision, recall, and F1-score as well as accuracy. Low recall for "
-        "GOOD QUALITY means some samples that meet the dataset's threshold may be missed."
-    )
+    st.info("Review precision, recall, and F1-score as well as accuracy. Low GOOD QUALITY recall means qualifying samples may be missed.")
 
 with tab_predict:
     st.subheader("Predict uploaded wine samples")
     st.write(
-        "Upload a CSV with the 11 measurement columns. Both comma- and "
-        "semicolon-delimited files are accepted. A quality column may be present; "
-        "it is ignored for prediction."
+        "Upload a CSV containing the 11 measurement columns. Comma- and semicolon-separated "
+        "files are supported, including the original quoted UCI file. The optional `quality` "
+        "column is ignored during prediction."
     )
-    feature_columns = list(model.feature_names_in_)
-    sample = data[feature_columns].head(5)
+    sample = data[FEATURE_COLUMNS].head(5)
     st.download_button(
         "Download sample input CSV",
         data=sample.to_csv(index=False).encode("utf-8"),
@@ -248,42 +296,35 @@ with tab_predict:
     if uploaded is not None:
         try:
             new_data = _read_csv_flexible(BytesIO(uploaded.getvalue()))
+            missing = [column for column in FEATURE_COLUMNS if column not in new_data.columns]
             if new_data.empty:
-                st.error("The uploaded CSV has no rows.")
+                st.error("The uploaded CSV has no data rows.")
+            elif missing:
+                st.error(
+                    "Missing required columns: " + ", ".join(missing)
+                    + ". Ensure the file has a header row with the 11 wine measurements. "
+                    "The original semicolon-delimited UCI CSV is supported; you can also "
+                    "download the sample input CSV above."
+                )
             else:
-                missing = [column for column in feature_columns if column not in new_data.columns]
-                if missing:
-                    st.error(
-                        "Missing required columns: "
-                        + ", ".join(missing)
-                        + ". Check that the first row contains the exact measurement headers. "
-                        "Semicolon-delimited UCI files are supported; download the sample CSV above."
-                    )
+                inputs = new_data[FEATURE_COLUMNS].apply(pd.to_numeric, errors="coerce")
+                invalid_rows = inputs.isna().all(axis=1)
+                if invalid_rows.any():
+                    st.error(f"{int(invalid_rows.sum())} row(s) have no usable numeric measurement values.")
                 else:
-                    inputs = new_data[feature_columns].apply(pd.to_numeric, errors="coerce")
-                    all_invalid = inputs.isna().all(axis=1)
-                    if all_invalid.any():
-                        st.error(
-                            f"{int(all_invalid.sum())} row(s) have no usable numeric measurements. "
-                            "Correct or remove those rows and upload again."
-                        )
-                    else:
-                        valid_inputs = inputs.loc[~all_invalid]
-                        predictions = model.predict(valid_inputs)
-                        results = new_data.loc[~all_invalid].copy()
-                        results["Prediction"] = [LABELS[int(value)] for value in predictions]
-                        st.subheader("Prediction results")
-                        st.dataframe(results, use_container_width=True)
-                        st.metric(
-                            "Predicted good-quality samples",
-                            int((predictions == 1).sum()),
-                        )
-                        st.download_button(
-                            "Download prediction results",
-                            data=results.to_csv(index=False).encode("utf-8"),
-                            file_name="wine_quality_predictions.csv",
-                            mime="text/csv",
-                        )
+                    # Partial missing measurements are handled by the pipeline's median imputer.
+                    predictions = model.predict(inputs)
+                    results = new_data.copy()
+                    results["Prediction"] = [LABELS[int(value)] for value in predictions]
+                    st.success(f"Predictions completed for {len(results):,} uploaded row(s).")
+                    st.dataframe(results, use_container_width=True)
+                    st.metric("Predicted good-quality samples", int((predictions == 1).sum()))
+                    st.download_button(
+                        "Download prediction results",
+                        data=results.to_csv(index=False).encode("utf-8"),
+                        file_name="wine_quality_predictions.csv",
+                        mime="text/csv",
+                    )
         except (pd.errors.ParserError, pd.errors.EmptyDataError, UnicodeDecodeError, ValueError) as exc:
             st.error(f"Could not read the uploaded CSV: {exc}")
 
