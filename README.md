@@ -1,12 +1,37 @@
-# Wine Quality Prediction Lab
+# Wine Quality Prediction System
 
-A Streamlit app that demonstrates preliminary red-wine quality classification from physicochemical measurements. The app trains a Random Forest pipeline when it starts and lets you predict from an uploaded CSV.
+A Section B Data Mining Laboratory prototype that uses physicochemical measurements to classify red-wine samples as **GOOD QUALITY** or **NEEDS IMPROVEMENT**. It follows the lab's binary target rule: quality score **≥ 6** is GOOD QUALITY; score **< 6** is NEEDS IMPROVEMENT. The original `quality` column is used only to create the target and is excluded from model input features.
 
-> **Responsible use:** This is a classroom prototype, not a substitute for laboratory testing, sensory evaluation, food-safety procedures, or professional quality-control decisions.
+> **Responsible use:** This is a classroom prototype based on a public dataset. Predictions are preliminary screening results, not a substitute for laboratory testing, sensory evaluation, food-safety procedures, or professional quality-control decisions.
 
-## Run locally
+## SAD mini-analysis
 
-Requirements: Python 3.10 or newer and Git.
+| SAD element | Description |
+| --- | --- |
+| Problem | Provide a consistent preliminary screen using recorded wine measurements. |
+| Users | Quality-control staff, production supervisor, or data analyst. |
+| Inputs | The 11 physicochemical measurement columns in the red-wine dataset. |
+| Process | Validate uploaded columns → impute missing values → classify with a Random Forest pipeline. |
+| Outputs | GOOD QUALITY / NEEDS IMPROVEMENT label and model evaluation summary. |
+| Limitation | The model uses one red-wine dataset and may not generalize to other wines or conditions. |
+
+## Files
+
+```text
+.
+├── .gitignore
+├── README.md
+├── requirements.txt
+├── streamlit_app.py     # Streamlit app and upload-prediction flow
+├── train_model.py       # download, train, evaluate, and save model
+└── wine-quality-prediction/  # original extracted classroom project assets
+```
+
+The app can run without pre-generated artifacts: it loads the dataset and trains its model at startup. `train_model.py` is included to match the lab exercise and to create `wine_quality.csv` and `wine_model.pkl` locally.
+
+## Requirements and local setup
+
+Use Python 3.10 or later. Clone this repository and install dependencies:
 
 ```bash
 git clone https://github.com/cbaclay92-max/Wine_Quality_Prediction_Lab_.git
@@ -14,53 +39,32 @@ cd Wine_Quality_Prediction_Lab_
 python -m venv .venv
 ```
 
-Activate the virtual environment, then install and launch:
+Activate the virtual environment (`source .venv/bin/activate` on macOS/Linux, or `.venv\\Scripts\\Activate.ps1` in PowerShell), then run:
 
 ```bash
-# macOS / Linux
-source .venv/bin/activate
-
-# Windows PowerShell
-# .venv\Scripts\Activate.ps1
-
 python -m pip install --upgrade pip
 pip install -r requirements.txt
+python train_model.py
 streamlit run streamlit_app.py
 ```
 
-Open the local URL printed by Streamlit (normally http://localhost:8501).
+The training script downloads the UCI red-wine data and saves `wine_quality.csv` plus `wine_model.pkl` in the repository root. It prints accuracy, a confusion matrix, and precision/recall/F1-score for both classes. The model uses a stratified 80/20 holdout split, `random_state=42`, median imputation, scaling, and a 150-tree Random Forest with balanced class weights.
 
-## Deploy on Streamlit Community Cloud
+## Streamlit Community Cloud
 
-1. Push this repository to GitHub.
-2. In [Streamlit Community Cloud](https://share.streamlit.io/), select **Create app**.
-3. Choose this repository, the `main` branch, and `streamlit_app.py` as the **Main file path**.
-4. Deploy. The root-level `requirements.txt` lists the app dependencies.
+1. Open [Streamlit Community Cloud](https://share.streamlit.io/) and choose **Create app**.
+2. Select this repository, branch `main`, and main file path `streamlit_app.py`.
+3. Deploy. The root `requirements.txt` contains the dependencies.
 
-The app looks for a wine CSV beside `streamlit_app.py`, then checks `wine-quality-prediction.zip` for the dataset, and finally falls back to the public UCI red-wine CSV. No model artifact needs to be committed; the model is trained and cached at runtime.
+For this public deployment, no secrets are required. The app searches for `wine_quality.csv` or `winequality-red.csv` beside the app, then for a matching file in `wine-quality-prediction.zip`, and finally downloads the UCI red-wine CSV. It supports comma- and semicolon-delimited uploads; the semicolon-delimited UCI `winequality-red.csv` may include the `quality` target, which the app ignores for prediction.
 
-## Dataset and prediction
+## Dataset and predictions
 
-The red-wine dataset is from the [UCI Machine Learning Repository](https://archive.ics.uci.edu/dataset/186/wine+quality). It contains physicochemical measurements and a sensory quality score. The app labels records with score **6 or higher** as `GOOD QUALITY`; lower scores are labeled `NEEDS IMPROVEMENT`. The quality score is used as the training target and is never used as an input feature.
-
-For predictions, use **Download sample input CSV** in the app to get the required feature columns, fill in sample measurements, and upload the CSV. The app displays and allows downloading the predictions.
-
-## Repository layout
-
-```text
-.
-├── .gitignore
-├── README.md
-├── requirements.txt
-├── streamlit_app.py       # Streamlit Community Cloud entry point
-├── wine-quality-prediction.zip
-└── Wine_Quality_Prediction_Lab_.ipynb
-```
-
-The notebook and extracted project materials are retained as reference/classroom assets. The deployed Streamlit entry point is the root-level `streamlit_app.py`.
+Dataset source: [UCI Machine Learning Repository — Wine Quality](https://archive.ics.uci.edu/dataset/186/wine+quality). The app shows dataset details and quality distribution, evaluates the Random Forest using a stratified holdout split, accepts uploaded CSV samples, validates required measurement columns, shows predictions, and offers a results download. Use **Download sample input CSV** to get a correctly formatted prediction template.
 
 ## Limitations
 
-- Trained on one red-wine dataset; performance may not generalize to other wine types, producers, regions, or testing conditions.
-- Quality ratings are subjective and the data is limited.
-- Predictions are preliminary screening results, not final quality judgments.
+- The model is trained on one red-wine dataset; it may not generalize to other wine types, producers, regions, or testing conditions.
+- Quality scores are subjective sensory ratings, and the dataset is limited.
+- Low recall for GOOD QUALITY could mean qualifying samples are missed; accuracy alone should not be used to judge performance.
+- The prototype does not replace professional quality-control procedures or food-safety assessments.
