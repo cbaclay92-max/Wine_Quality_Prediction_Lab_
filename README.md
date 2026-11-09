@@ -23,8 +23,7 @@ A Section B Data Mining Laboratory prototype that uses physicochemical measureme
 ├── README.md
 ├── requirements.txt
 ├── streamlit_app.py     # Streamlit app and upload-prediction flow
-├── train_model.py       # download, train, evaluate, and save model
-└── wine-quality-prediction/  # original extracted classroom project assets
+└── train_model.py       # download, train, evaluate, and save model
 ```
 
 The app can run without pre-generated artifacts: it loads the dataset and trains its model at startup. `train_model.py` is included to match the lab exercise and to create `wine_quality.csv` and `wine_model.pkl` locally.
@@ -49,6 +48,16 @@ streamlit run streamlit_app.py
 ```
 
 The training script downloads the UCI red-wine data and saves `wine_quality.csv` plus `wine_model.pkl` in the repository root. It prints accuracy, a confusion matrix, and precision/recall/F1-score for both classes. The model uses a stratified 80/20 holdout split, `random_state=42`, median imputation, scaling, and a 150-tree Random Forest with balanced class weights.
+
+## App features
+
+- Dataset preview
+- Missing-value and duplicate checks
+- Quality distribution view
+- Model evaluation metrics
+- Upload CSV prediction flow
+- Download prediction results
+- Responsible-use warning
 
 ## Streamlit Community Cloud
 
