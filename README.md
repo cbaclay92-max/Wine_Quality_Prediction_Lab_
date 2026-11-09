@@ -59,6 +59,21 @@ The training script downloads the UCI red-wine data and saves `wine_quality.csv`
 - Download prediction results
 - Responsible-use warning
 
+## Testing checklist
+
+Run these checks locally before submission. Leave the boxes unchecked until you have personally confirmed each result in your environment; a checklist in the README is not itself proof that the app was executed.
+
+| Test | Expected result | Pass? |
+| --- | --- | :---: |
+| Run `python train_model.py` | Downloads/loads the dataset without errors and creates `wine_quality.csv` and `wine_model.pkl`. | ☐ |
+| Run `streamlit run streamlit_app.py` | The dashboard loads in the browser, normally at `http://localhost:8501`. | ☐ |
+| Upload a sample CSV with the 11 measurement columns | Predictions are displayed for every valid uploaded row. | ☐ |
+| Upload a CSV missing a required measurement column | The app displays a helpful message naming the missing columns. | ☐ |
+| Download prediction results | A CSV is downloaded with the uploaded data and a `Prediction` column. | ☐ |
+| Open the GitHub repository | The source files and README are visible. | ☒ |
+
+**Labeled upload behavior:** If an uploaded CSV contains numeric `quality` labels, the app uses it as the active dataset and refreshes the dataset summary and holdout evaluation. If it has no `quality` column, it is prediction-only; evaluation remains based on the labeled reference dataset because accuracy and related metrics require true labels.
+
 ## Streamlit Community Cloud
 
 1. Open [Streamlit Community Cloud](https://share.streamlit.io/) and choose **Create app**.
