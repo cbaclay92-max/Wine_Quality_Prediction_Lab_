@@ -33,13 +33,31 @@ DATA_CANDIDATES = ("wine_quality.csv", "winequality-red.csv")
 ZIP_CANDIDATES = ("wine-quality-prediction.zip", "winequality.zip")
 
 
+def _read_csv_flexible(source: str | BytesIO) -> pd.DataFrame:
+    """Read comma- or semicolon-delimited CSV and normalize column headers.
+
+    The UCI red-wine file uses semicolons, while many spreadsheet exports use
+    commas. Let pandas infer the delimiter so either format is accepted.
+    """
+    frame = pd.read_csv(
+        source,
+        sep=None,
+        engine="python",
+        skipinitialspace=True,
+        encoding="utf-8-sig",
+    )
+    frame.columns = [str(column).strip().strip('"').strip("'") for column in frame.columns]
+    return frame
+
+
 def _read_wine_csv(source: str | BytesIO) -> pd.DataFrame:
-    """Read either the semicolon-delimited UCI file or a regular CSV copy."""
-    frame = pd.read_csv(source, sep=";")
-    if "quality" not in frame.columns and isinstance(source, (str, Path)):
-        frame = pd.read_csv(source)
+    """Read a wine CSV and verify it contains the quality target."""
+    frame = _read_csv_flexible(source)
     if "quality" not in frame.columns:
-        raise ValueError("The dataset must contain a 'quality' column.")
+        raise ValueError(
+            "The dataset must contain a 'quality' column. Check that the CSV "
+            "uses comma or semicolon delimiters."
+        )
     return frame
 
 
@@ -59,7 +77,11 @@ def load_dataset() -> pd.DataFrame:
             continue
         with zipfile.ZipFile(path) as archive:
             match = next(
-                (name for name in archive.namelist() if name.lower().endswith("winequality-red.csv")),
+                (
+                    name
+                    for name in archive.namelist()
+                    if name.lower().endswith("winequality-red.csv")
+                ),
                 None,
             )
             if match:
@@ -105,6 +127,9 @@ try:
     if data.empty:
         st.error("The wine dataset is empty.")
         st.stop()
+    if "quality" not in data.columns:
+        st.error("The wine dataset must contain a 'quality' column.")
+        st.stop()
     if not data.select_dtypes(include="number").columns.size:
         st.error("The wine dataset has no numeric measurements to use as predictors.")
         st.stop()
@@ -126,7 +151,10 @@ st.subheader("Dataset preview")
 st.dataframe(data.head(10), use_container_width=True)
 
 st.subheader("Predict uploaded wine samples")
-st.write("Upload a CSV with the same numeric measurement columns used to train the model.")
+st.write(
+    "Upload a CSV with the same numeric measurement columns used to train the model. "
+    "Comma- and semicolon-delimited CSV files are supported."
+)
 feature_columns = list(model.feature_names_in_)
 template = data[feature_columns].head(5)
 st.download_button(
@@ -139,13 +167,18 @@ st.download_button(
 uploaded = st.file_uploader("Choose wine sample CSV", type=["csv"])
 if uploaded is not None:
     try:
-        new_data = pd.read_csv(uploaded)
+        new_data = _read_csv_flexible(BytesIO(uploaded.getvalue()))
         if new_data.empty:
             st.error("The uploaded CSV has no rows.")
         else:
             missing = [column for column in feature_columns if column not in new_data.columns]
             if missing:
-                st.error("Missing required columns: " + ", ".join(missing))
+                st.error(
+                    "Missing required columns: "
+                    + ", ".join(missing)
+                    + ". Ensure the file is a CSV with the header row, using commas "
+                    "or semicolons between columns. You can download the sample input CSV above."
+                )
             else:
                 inputs = new_data[feature_columns].apply(pd.to_numeric, errors="coerce")
                 if inputs.isna().all(axis=None):
@@ -166,7 +199,7 @@ if uploaded is not None:
                         file_name="wine_quality_predictions.csv",
                         mime="text/csv",
                     )
-    except (pd.errors.ParserError, UnicodeDecodeError, ValueError) as exc:
+    except (pd.errors.ParserError, pd.errors.EmptyDataError, UnicodeDecodeError, ValueError) as exc:
         st.error(f"Could not read the uploaded CSV: {exc}")
 
 st.warning(
